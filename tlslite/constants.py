@@ -121,6 +121,11 @@ class ExtensionType:    # RFC 6066 / 4366
     client_hello_padding = 21 # RFC 7685
     encrypt_then_mac = 22 # RFC 7366
     extended_master_secret = 23 # RFC 7627
+    key_share = 40      # TLS 1.3 draft
+    pre_shared_key = 41 # TLS 1.3 draft
+    early_data = 42     # TLS 1.3 draft
+    cookie = 44         # TLS 1.3 draft
+    
     tack = 0xF300
     supports_npn = 13172
     renegotiation_info = 0xff01

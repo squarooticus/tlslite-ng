@@ -9,8 +9,9 @@ and ServerHello messages.
 from __future__ import generators
 from .utils.codec import Writer, Parser
 from collections import namedtuple
-from .constants import NameType, ExtensionType
+from .constants import NameType, ExtensionType, GroupName
 from .errors import TLSInternalError
+from .utils.ecc import decodeX962Point, encodeX962Point, getCurveByName
 
 class TLSExtension(object):
     """
@@ -978,6 +979,157 @@ class SupportedGroupsExtension(VarListExtension):
         """Create instance of class"""
         super(SupportedGroupsExtension, self).__init__(2, 2, 'groups', \
             ExtensionType.supported_groups)
+
+class KeyShareExtension(TLSExtension):
+    """
+    List of key shares for supported groups.
+
+    See draft-ietf-tls-tls13
+
+    @type groups: int
+    @ivar groups: list of (group, public KX share)
+    """
+
+    class KeyShareEntry(object):
+        """
+        Implementation of the single KeyShareEntry
+        """
+        def __init__(self):
+            """
+            Create a single KeyShareEntry object
+            """
+            self.group = 0
+            self.key_exchange = None
+
+        def __repr__(self):
+            """
+            Return programmmer readable representation of KeyShareEntry object
+
+            @rtype: str
+            """
+            return "KeyShareEntry(group{0!r}, key_exchange={1!r}".format(
+                    self.group, self.key_exchange)
+
+        def create(self, group, key_exchange):
+            """
+            Initialise the KeyShareEntry with data
+            """
+            self.group = group
+            self.key_exchange = key_exchange
+            return self
+
+        def write(self):
+            """
+            Convert the KeyShareEntry into on the wire format
+
+            @rtype: bytearray
+            """
+            w = Writer()
+            w.add(self.group, 2)
+            if self.key_exchange is None:
+                raise TLSInternalError("Key_exchange is None")
+            # TODO: This needs to be abstracted out to support EdDH
+            kx_encoded = encodeX962Point(self.key_exchange)
+            if len(kx_encoded) > 2**16-1:
+                raise TLSInternalError("Encoded key_exchange must be less than 64K bytes long")
+            w.add(len(kx_encoded), 2)
+            w.bytes += kx_encoded
+            return w.bytes
+
+        def parse(self, p):
+            """
+            Parse the KeyShareEntry from on the wire format
+
+            @type p: L{tlslite.util.codec.Parser}
+            @param p: data to be parsed
+
+            @rtype: L{KeyShareEntry}
+            @raise SyntaxError: when the internal sizes don't match the
+                provided data
+            """
+            self.group = p.get(2)
+            kxlen = p.get(2)
+            kx_encoded = p.getFixBytes(kxlen)
+            # TODO: This needs to be abstracted out to support EdDH, and to fail in a saner way when the group isn't supported
+            self.key_exchange = decodeX962(kx_encoded, getCurveByName(GroupName.toRepr(self.group)))
+            return self
+
+        def __eq__(self, other):
+            """
+            Tests if the other object is equivalent to this KeyShareEntry
+
+            Returns False for every object that's not a KeyShareEntry
+            """
+            if hasattr(other, 'group') and\
+                    hasattr(other, 'key_exchange'):
+                if self.group == other.group and\
+                        self.key_exchange == other.key_exchange:
+                    return True
+                else:
+                    return False
+            else:
+                return False
+
+    def __init__(self):
+        """
+        Create an instance of KeyShareExtension
+        """
+        super(KeyShareExtension, self).__init__(extType=ExtensionType.key_share)
+
+        self.key_shares = []
+
+    def __repr__(self):
+        """
+        Create a programmer readable representation of KeyShare extension
+
+        @rtype: str
+        """
+        return "KeyShareExtension(key_shares={1!r})".format(self.key_shares)
+
+    @property
+    def extData(self):
+        """
+        Return the raw data encoding of the extension
+
+        @rtype: bytearray
+        """
+        w2 = Writer()
+        for s in self.key_shares:
+            w2.bytes += s.write()
+
+        w = Writer()
+        w.add(len(w2.bytes), 2)
+        w.bytes += w2.bytes
+        return w.bytes
+
+    def create(self, key_shares):
+        """
+        Initialize the instance of KeyShareExtension
+
+        @rtype: KeyShareExtension
+        """
+
+        self.key_shares = key_shares
+        return self
+
+    def parse(self, p):
+        """
+        Parse the extension from on the wire format
+
+        @type p: L{tlslite.util.codec.Parser}
+        @param p: data to be parsed
+
+        @rtype: L{KeyShareExtension}
+        """
+        self.key_shares = []
+
+        p.startLengthCheck(2)
+        while not p.atLengthCheck():
+            key_share = KeyShareExtension.KeyShareEntry().parse(p)
+            self.key_shares += [key_share]
+        p.stopLengthCheck()
+
+        return self
 
 class ECPointFormatsExtension(VarListExtension):
     """
